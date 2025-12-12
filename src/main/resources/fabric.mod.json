@@ -16,6 +16,9 @@
   "entrypoints": {
     "main": [
       "com.davinawuy.minecraftguard.MinecraftGuard"
+    ],
+    "client": [
+      "com.davinawuy.minecraftguard.client.MinecraftGuardClient"
     ]
   },
   "mixins": [
