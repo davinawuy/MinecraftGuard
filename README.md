@@ -4,12 +4,30 @@ This is a test of the ability of AI to create Minecraft Mods.
 
 ## About
 
-MinecraftGuard is a Minecraft Java mod built using the Fabric mod loader. This project serves as a foundation for creating custom Minecraft modifications.
+MinecraftGuard is a Minecraft Java mod built using the **Fabric mod loader**. This project serves as a foundation for creating custom Minecraft modifications.
+
+This repository contains a complete base setup for Minecraft mod development, including:
+- ✅ Gradle build system with wrapper
+- ✅ Fabric mod loader configuration
+- ✅ Proper directory structure
+- ✅ Main mod class with initialization
+- ✅ Mod metadata (fabric.mod.json)
+- ✅ Mixin configuration
+- ✅ Comprehensive setup documentation
+
+See [SETUP.md](SETUP.md) for detailed setup instructions and [EXAMPLES.md](EXAMPLES.md) for code examples.
 
 ## Prerequisites
 
 - Java 17 or higher
 - Gradle (included via Gradle Wrapper)
+
+## Prerequisites
+
+- **Java 17 or higher** - [Download JDK](https://adoptium.net/)
+- **Network access** to Maven repositories:
+  - https://maven.fabricmc.net/ (Fabric Maven Repository)
+  - https://repo.maven.apache.org/maven2/ (Maven Central)
 
 ## Building the Mod
 
@@ -18,6 +36,8 @@ To build the mod, run:
 ```bash
 ./gradlew build
 ```
+
+**Note**: The first build will download Minecraft, Fabric Loader, Fabric API, and other dependencies. This may take 5-15 minutes depending on your internet connection.
 
 The compiled mod JAR will be located in `build/libs/`.
 
