@@ -11,6 +11,8 @@ import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.passive.PassiveEntity;
 import net.minecraft.entity.passive.TameableEntity;
@@ -29,12 +31,27 @@ import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.world.World;
 import net.minecraft.world.EntityView;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.scoreboard.AbstractTeam;
 
 import java.util.EnumSet;
+import java.util.List;
 
 public class GuardEntity extends TameableEntity implements RangedAttackMob, CrossbowUser {
     private static final TrackedData<String> ROLE = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.STRING);
     private static final TrackedData<String> SKIN_URL = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.STRING);
+    private static final TrackedData<String> PATROL_MODE = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.STRING);
+    private static final TrackedData<String> SHIFT = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.STRING);
+    private static final TrackedData<Integer> SUSPICION = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.INTEGER);
+
+    private BlockPos territoryCenter;
+    private int territoryRadius = 16;
+    private BlockPos lastKnownTarget;
+    private int memoryTicks;
+    private boolean warnedTarget;
+    private int patrolIndex;
 
     public GuardEntity(EntityType<? extends TameableEntity> entityType, World world) {
         super(entityType, world);
@@ -58,7 +75,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         this.goalSelector.add(3, new GuardRangedAttackGoal(this, GuardRole.CROSSBOW, 40, 14.0f));
         this.goalSelector.add(4, new MeleeAttackGoal(this, 1.3D, true));
         this.goalSelector.add(5, new FollowOwnerGoal(this, 1.1D, 6.0f, 2.0f, false));
-        this.goalSelector.add(6, new WanderAroundFarGoal(this, 0.8D));
+        this.goalSelector.add(6, new GuardPatrolGoal(this));
         this.goalSelector.add(7, new LookAtEntityGoal(this, PlayerEntity.class, 8.0F));
         this.goalSelector.add(8, new LookAroundGoal(this));
 
@@ -72,6 +89,9 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (this.getOwner() == null) {
             return false;
         }
+        if (!this.isOnDuty() || !this.isWithinTerritory(entity)) {
+            return false;
+        }
         return entity.getAttacker() == this.getOwner() || this.getOwner().getAttacker() == entity;
     }
 
@@ -80,6 +100,9 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         super.initDataTracker();
         this.dataTracker.startTracking(ROLE, GuardRole.SWORD.getId());
         this.dataTracker.startTracking(SKIN_URL, "");
+        this.dataTracker.startTracking(PATROL_MODE, PatrolMode.POST.getId());
+        this.dataTracker.startTracking(SHIFT, ShiftSchedule.ALWAYS.getId());
+        this.dataTracker.startTracking(SUSPICION, 0);
     }
 
     public GuardRole getGuardRole() {
@@ -97,6 +120,34 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
 
     public void setSkinUrl(String url) {
         this.dataTracker.set(SKIN_URL, url == null ? "" : url);
+    }
+
+    public PatrolMode getPatrolMode() {
+        return PatrolMode.fromId(this.dataTracker.get(PATROL_MODE));
+    }
+
+    public void setPatrolMode(PatrolMode mode) {
+        this.dataTracker.set(PATROL_MODE, mode.getId());
+        this.patrolIndex = 0;
+    }
+
+    public ShiftSchedule getShiftSchedule() {
+        return ShiftSchedule.fromId(this.dataTracker.get(SHIFT));
+    }
+
+    public void setShiftSchedule(ShiftSchedule schedule) {
+        this.dataTracker.set(SHIFT, schedule.getId());
+    }
+
+    public int getSuspicion() {
+        return this.dataTracker.get(SUSPICION);
+    }
+
+    private void setSuspicion(int value) {
+        this.dataTracker.set(SUSPICION, MathHelper.clamp(value, 0, 100));
+        if (this.getSuspicion() < 10) {
+            this.warnedTarget = false;
+        }
     }
 
     @Override
@@ -134,6 +185,33 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
                 return ActionResult.SUCCESS;
             }
 
+            if (item == Items.COMPASS) {
+                PatrolMode nextMode = switch (this.getPatrolMode()) {
+                    case POST -> PatrolMode.WAYPOINT;
+                    case WAYPOINT -> PatrolMode.RANDOM;
+                    default -> PatrolMode.POST;
+                };
+                this.setPatrolMode(nextMode);
+                this.setTerritoryCenter(this.getBlockPos());
+                if (!player.getWorld().isClient) {
+                    player.sendMessage(Text.literal("Patrol mode set to " + nextMode.getDisplayName()), true);
+                }
+                return ActionResult.SUCCESS;
+            }
+
+            if (item == Items.CLOCK) {
+                ShiftSchedule next = switch (this.getShiftSchedule()) {
+                    case DAY -> ShiftSchedule.NIGHT;
+                    case NIGHT -> ShiftSchedule.ALWAYS;
+                    default -> ShiftSchedule.DAY;
+                };
+                this.setShiftSchedule(next);
+                if (!player.getWorld().isClient) {
+                    player.sendMessage(Text.literal("Shift set to " + next.getDisplayName()), true);
+                }
+                return ActionResult.SUCCESS;
+            }
+
             GuardRole desiredRole = this.roleFromItem(item);
             if (desiredRole != null) {
                 this.setGuardRole(desiredRole);
@@ -165,6 +243,10 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
     public void tick() {
         super.tick();
         if (!this.getWorld().isClient) {
+            this.ensureTerritoryCenter();
+            this.updateDutyCycle();
+            this.handlePerception();
+            this.updateMemoryNavigation();
             ensureEquipment();
         }
     }
@@ -178,6 +260,12 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         }
     }
 
+    private void ensureTerritoryCenter() {
+        if (this.territoryCenter == null) {
+            this.territoryCenter = this.getBlockPos();
+        }
+    }
+
     private ItemStack getRoleItem(GuardRole role) {
         return switch (role) {
             case ARCHER -> new ItemStack(Items.BOW);
@@ -185,6 +273,218 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
             case MACE -> new ItemStack(Items.IRON_AXE);
             default -> new ItemStack(Items.IRON_SWORD);
         };
+    }
+
+    public BlockPos getTerritoryCenter() {
+        if (this.territoryCenter == null) {
+            this.territoryCenter = this.getBlockPos();
+        }
+        return this.territoryCenter;
+    }
+
+    public void setTerritoryCenter(BlockPos pos) {
+        this.territoryCenter = pos;
+    }
+
+    private boolean isWithinTerritory(Entity entity) {
+        return entity.getBlockPos().isWithinDistance(this.getTerritoryCenter(), this.territoryRadius);
+    }
+
+    private void updateDutyCycle() {
+        if (!this.isOnDuty()) {
+            if (!this.isSitting()) {
+                this.setSitting(true);
+            }
+            this.setTarget(null);
+            this.getNavigation().stop();
+            if (!this.getBlockPos().isWithinDistance(this.getTerritoryCenter(), 2.5)) {
+                this.getNavigation().startMovingTo(this.getTerritoryCenter().getX() + 0.5, this.getTerritoryCenter().getY(), this.getTerritoryCenter().getZ() + 0.5, 1.0D);
+            }
+            this.decaySuspicion();
+            return;
+        }
+
+        if (this.isSitting() && this.getTarget() == null) {
+            this.setSitting(false);
+        }
+    }
+
+    private void handlePerception() {
+        if (this.getWorld().isClient || this.age % 10 != 0) {
+            return;
+        }
+
+        if (!this.isOnDuty()) {
+            this.decaySuspicion();
+            return;
+        }
+
+        this.decaySuspicion();
+
+        List<PlayerEntity> players = this.getWorld().getPlayers(player -> player.squaredDistanceTo(this) <= 256);
+        for (PlayerEntity player : players) {
+            this.evaluatePlayer(player);
+        }
+
+        LivingEntity target = this.getTarget();
+        if (target != null) {
+            this.adjustRoleForTarget(target);
+            this.lastKnownTarget = target.getBlockPos();
+            this.memoryTicks = 200;
+            if (target instanceof PlayerEntity player) {
+                this.attemptArrest(player);
+            }
+        }
+    }
+
+    private void evaluatePlayer(PlayerEntity player) {
+        if (!player.isAlive() || player.isSpectator() || player.isCreative()) {
+            return;
+        }
+        if (!this.isWithinTerritory(player)) {
+            return;
+        }
+        if (player.getScoreboardTags().contains("guard_enemy")) {
+            this.increaseSuspicion(40, player);
+            return;
+        }
+        if (this.isWhitelisted(player)) {
+            return;
+        }
+
+        int gain = 4;
+        if (player.isSprinting() || player.isSwimming()) {
+            gain += 4;
+        }
+        if (player.isSneaking()) {
+            gain += 2;
+        }
+        if (!this.getWorld().isDay()) {
+            gain += 3;
+        }
+        this.increaseSuspicion(gain, player);
+    }
+
+    private void increaseSuspicion(int amount, LivingEntity source) {
+        if (source instanceof PlayerEntity player && this.isWhitelisted(player)) {
+            return;
+        }
+        this.setSuspicion(this.getSuspicion() + amount);
+        if (source != null) {
+            this.lastKnownTarget = source.getBlockPos();
+            this.memoryTicks = Math.max(this.memoryTicks, 120);
+        }
+        if (this.getSuspicion() >= 60 && this.getTarget() == null && source != null) {
+            this.escalateToTarget(source);
+        } else if (this.getSuspicion() >= 30 && !this.warnedTarget && source != null) {
+            this.warnEntity(source);
+        }
+    }
+
+    private void decaySuspicion() {
+        if (this.getSuspicion() > 0) {
+            this.setSuspicion(this.getSuspicion() - 1);
+        }
+    }
+
+    private void warnEntity(LivingEntity entity) {
+        this.warnedTarget = true;
+        this.playSound(SoundEvents.ENTITY_VILLAGER_NO, 1.0f, 1.0f);
+        if (entity instanceof PlayerEntity player && !player.getWorld().isClient) {
+            player.sendMessage(Text.literal("Guard: Halt! State your business."), true);
+        }
+    }
+
+    private void escalateToTarget(LivingEntity source) {
+        if (source == null || !source.isAlive()) {
+            return;
+        }
+        this.setTarget(source);
+        this.raiseAlarm();
+        this.callForBackup(source);
+    }
+
+    private void raiseAlarm() {
+        this.getWorld().playSound(null, this.getBlockPos(), SoundEvents.BLOCK_BELL_USE, this.getSoundCategory(), 2.0f, 1.0f);
+    }
+
+    private void callForBackup(Entity threat) {
+        if (!(threat instanceof LivingEntity living)) {
+            return;
+        }
+        List<GuardEntity> allies = this.getWorld().getEntitiesByClass(GuardEntity.class, this.getBoundingBox().expand(16.0D), guard -> guard != this && guard.isOnDuty());
+        for (GuardEntity ally : allies) {
+            if (ally.getTarget() == null && ally.isWithinTerritory(threat)) {
+                ally.setTarget(living);
+            }
+        }
+    }
+
+    private void updateMemoryNavigation() {
+        if (this.getTarget() != null || this.lastKnownTarget == null || this.isSitting()) {
+            return;
+        }
+
+        if (this.memoryTicks > 0) {
+            if (!this.getNavigation().isFollowingPath()) {
+                this.getNavigation().startMovingTo(this.lastKnownTarget.getX() + 0.5, this.lastKnownTarget.getY(), this.lastKnownTarget.getZ() + 0.5, 1.05D);
+            }
+            this.memoryTicks--;
+        } else {
+            this.lastKnownTarget = null;
+        }
+    }
+
+    private boolean isWhitelisted(PlayerEntity player) {
+        if (this.isOwner(player)) {
+            return true;
+        }
+        if (player.getScoreboardTags().contains("guard_friend")) {
+            return true;
+        }
+        if (this.getOwner() instanceof PlayerEntity owner) {
+            AbstractTeam ownerTeam = owner.getScoreboardTeam();
+            AbstractTeam playerTeam = player.getScoreboardTeam();
+            if (ownerTeam != null && ownerTeam.equals(playerTeam)) {
+                return true;
+            }
+        }
+        return this.isWearingUniform(player);
+    }
+
+    private boolean isWearingUniform(PlayerEntity player) {
+        return player.getEquippedStack(EquipmentSlot.CHEST).isOf(Items.IRON_CHESTPLATE)
+                || player.getEquippedStack(EquipmentSlot.CHEST).isOf(Items.CHAINMAIL_CHESTPLATE);
+    }
+
+    private void attemptArrest(PlayerEntity player) {
+        if (this.getWorld().isClient) {
+            return;
+        }
+        if (this.squaredDistanceTo(player) > 16.0D) {
+            return;
+        }
+        if (player.getHealth() <= 6.0F) {
+            player.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 120, 1));
+            player.addStatusEffect(new StatusEffectInstance(StatusEffects.WEAKNESS, 120, 0));
+            player.sendMessage(Text.literal("You are under arrest. Drop your weapons!"), true);
+        }
+    }
+
+    private void adjustRoleForTarget(LivingEntity target) {
+        if (target == null) {
+            return;
+        }
+        double distanceSq = this.squaredDistanceTo(target);
+        if (distanceSq > 144.0D && this.getGuardRole() == GuardRole.SWORD) {
+            this.setGuardRole(GuardRole.CROSSBOW);
+        } else if (distanceSq < 16.0D && this.getGuardRole() == GuardRole.ARCHER) {
+            this.setGuardRole(GuardRole.SWORD);
+        }
+    }
+
+    private boolean isOnDuty() {
+        return this.getShiftSchedule().isOnDuty(this.getWorld());
     }
 
     private void equipForRole(GuardRole role) {
@@ -201,7 +501,19 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (this.isInvulnerableTo(source)) {
             return false;
         }
-        return super.damage(source, amount);
+        boolean result = super.damage(source, amount);
+        if (result && !this.getWorld().isClient) {
+            Entity attacker = source.getAttacker();
+            if (attacker instanceof LivingEntity living) {
+                this.increaseSuspicion(40, living);
+                this.setTarget(living);
+            }
+            if (source.isExplosive()) {
+                this.raiseAlarm();
+                this.callForBackup(attacker);
+            }
+        }
+        return result;
     }
 
     @Override
@@ -209,6 +521,14 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         super.writeCustomDataToNbt(nbt);
         nbt.putString("GuardRole", this.getGuardRole().getId());
         nbt.putString("SkinUrl", this.getSkinUrl());
+        nbt.putString("PatrolMode", this.getPatrolMode().getId());
+        nbt.putString("Shift", this.getShiftSchedule().getId());
+        BlockPos center = this.getTerritoryCenter();
+        nbt.putInt("TerritoryX", center.getX());
+        nbt.putInt("TerritoryY", center.getY());
+        nbt.putInt("TerritoryZ", center.getZ());
+        nbt.putInt("TerritoryRadius", this.territoryRadius);
+        nbt.putInt("Suspicion", this.getSuspicion());
     }
 
     @Override
@@ -216,6 +536,16 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         super.readCustomDataFromNbt(nbt);
         this.setGuardRole(GuardRole.fromId(nbt.getString("GuardRole")));
         this.setSkinUrl(nbt.getString("SkinUrl"));
+        this.setPatrolMode(PatrolMode.fromId(nbt.getString("PatrolMode")));
+        this.setShiftSchedule(ShiftSchedule.fromId(nbt.getString("Shift")));
+        int x = nbt.getInt("TerritoryX");
+        int y = nbt.getInt("TerritoryY");
+        int z = nbt.getInt("TerritoryZ");
+        if (x != 0 || y != 0 || z != 0) {
+            this.territoryCenter = new BlockPos(x, y, z);
+        }
+        this.territoryRadius = nbt.contains("TerritoryRadius") ? nbt.getInt("TerritoryRadius") : this.territoryRadius;
+        this.setSuspicion(nbt.getInt("Suspicion"));
     }
 
     @Override
@@ -269,9 +599,16 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
 
     @Override
     public void setTarget(LivingEntity target) {
+        LivingEntity previous = this.getTarget();
         super.setTarget(target);
         if (target != null) {
             this.setSitting(false);
+            this.lastKnownTarget = target.getBlockPos();
+            this.memoryTicks = 200;
+            this.warnedTarget = false;
+        } else if (previous != null) {
+            this.lastKnownTarget = previous.getBlockPos();
+            this.memoryTicks = 120;
         }
     }
 
@@ -284,6 +621,59 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
             child.setGuardRole(this.getGuardRole());
         }
         return child;
+    }
+
+    private BlockPos getNextPatrolPos() {
+        PatrolMode mode = this.getPatrolMode();
+        BlockPos center = this.getTerritoryCenter();
+        return switch (mode) {
+            case POST -> center;
+            case RANDOM -> center.add(MathHelper.nextInt(this.getRandom(), -this.territoryRadius, this.territoryRadius), 0, MathHelper.nextInt(this.getRandom(), -this.territoryRadius, this.territoryRadius));
+            case WAYPOINT -> {
+                int index = this.patrolIndex % 4;
+                this.patrolIndex = (this.patrolIndex + 1) % 4;
+                yield switch (index) {
+                    case 0 -> center.add(this.territoryRadius / 2, 0, 0);
+                    case 1 -> center.add(0, 0, this.territoryRadius / 2);
+                    case 2 -> center.add(-this.territoryRadius / 2, 0, 0);
+                    default -> center.add(0, 0, -this.territoryRadius / 2);
+                };
+            }
+        };
+    }
+
+    static class GuardPatrolGoal extends Goal {
+        private final GuardEntity guard;
+        private int cooldown;
+
+        GuardPatrolGoal(GuardEntity guard) {
+            this.guard = guard;
+            this.setControls(EnumSet.of(Control.MOVE, Control.LOOK));
+        }
+
+        @Override
+        public boolean canStart() {
+            return this.guard.getTarget() == null && !this.guard.isSitting() && this.guard.isOnDuty();
+        }
+
+        @Override
+        public boolean shouldContinue() {
+            return this.guard.getTarget() == null && this.guard.isOnDuty();
+        }
+
+        @Override
+        public void tick() {
+            if (this.cooldown > 0) {
+                this.cooldown--;
+                return;
+            }
+            BlockPos next = this.guard.getNextPatrolPos();
+            if (next != null) {
+                this.guard.getNavigation().startMovingTo(next.getX() + 0.5, next.getY(), next.getZ() + 0.5, 1.05D);
+                this.guard.getLookControl().lookAt(next.getX() + 0.5, next.getY(), next.getZ() + 0.5);
+            }
+            this.cooldown = 80 + this.guard.getRandom().nextInt(40);
+        }
     }
 
     static class GuardRangedAttackGoal extends Goal {
@@ -306,13 +696,13 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         @Override
         public boolean canStart() {
             LivingEntity target = this.guard.getTarget();
-            return this.guard.getGuardRole() == this.role && !this.guard.isSitting() && target != null && target.isAlive();
+            return this.guard.getGuardRole() == this.role && !this.guard.isSitting() && target != null && target.isAlive() && this.guard.isOnDuty();
         }
 
         @Override
         public boolean shouldContinue() {
             LivingEntity target = this.guard.getTarget();
-            return this.guard.getGuardRole() == this.role && !this.guard.isSitting() && target != null && target.isAlive();
+            return this.guard.getGuardRole() == this.role && !this.guard.isSitting() && target != null && target.isAlive() && this.guard.isOnDuty();
         }
 
         @Override

@@ -8,7 +8,7 @@
 // The plugins section below will need to download from Fabric's Maven repository
 
 plugins {
-    id 'fabric-loom' version '1.6.12'
+    id 'fabric-loom' version '1.6-SNAPSHOT'
     id 'maven-publish'
     id 'java'
 }
