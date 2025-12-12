@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "minecraftguard",
+  "version": "${version}",
+  "name": "MinecraftGuard",
+  "description": "A Minecraft mod for testing AI's ability to create mods",
+  "authors": [
+    "davinawuy"
+  ],
+  "contact": {
+    "homepage": "https://github.com/davinawuy/MinecraftGuard",
+    "sources": "https://github.com/davinawuy/MinecraftGuard"
+  },
+  "license": "All Rights Reserved",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.davinawuy.minecraftguard.MinecraftGuard"
+    ]
+  },
+  "mixins": [
+    "minecraftguard.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "~1.20.1",
+    "java": ">=17",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "another-mod": "*"
+  }
+}
