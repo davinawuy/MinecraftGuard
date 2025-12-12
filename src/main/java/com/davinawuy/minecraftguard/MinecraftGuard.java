@@ -10,6 +10,8 @@ public class MinecraftGuard implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        ModEntities.init();
+        ModItems.init();
         LOGGER.info("MinecraftGuard mod has been initialized!");
     }
 }
