@@ -38,6 +38,7 @@ import net.minecraft.scoreboard.AbstractTeam;
 
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 public class GuardEntity extends TameableEntity implements RangedAttackMob, CrossbowUser {
     private static final TrackedData<String> ROLE = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.STRING);
@@ -45,9 +46,30 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
     private static final TrackedData<String> PATROL_MODE = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.STRING);
     private static final TrackedData<String> SHIFT = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.STRING);
     private static final TrackedData<Integer> SUSPICION = DataTracker.registerData(GuardEntity.class, TrackedDataHandlerRegistry.INTEGER);
+    private static final double DETECTION_RANGE = 16.0D;
+    private static final double DETECTION_RANGE_SQ = DETECTION_RANGE * DETECTION_RANGE;
+    private static final float ARREST_HEALTH_THRESHOLD = 6.0F; // 3 hearts
+    private static final String ENEMY_TAG = "guard_enemy";
+    private static final String FRIEND_TAG = "guard_friend";
+    private static final int WAYPOINT_COUNT = 4;
+    private static final int BASE_SUSPICION_GAIN = 4;
+    private static final int MOVEMENT_SUSPICION_BONUS = 4;
+    private static final int SNEAK_SUSPICION_BONUS = 2;
+    private static final int NIGHT_SUSPICION_BONUS = 3;
+    private static final int ESCALATION_THRESHOLD = 60;
+    private static final int WARNING_THRESHOLD = 30;
+    private static final int BASE_PATROL_COOLDOWN = 80;
+    private static final int PATROL_COOLDOWN_VARIANCE = 40;
+    private static final double RANGED_SWITCH_RANGE_SQ = 144.0D;
+    private static final double MELEE_SWITCH_RANGE_SQ = 16.0D;
+    private static final double BACKUP_RANGE = 16.0D;
+    private static final double ARREST_RANGE_SQ = 16.0D;
+    private static final int MEMORY_TICKS_PRIMARY = 200;
+    private static final int MEMORY_TICKS_FALLBACK = 120;
+    private static final int DEFAULT_TERRITORY_RADIUS = 16;
 
     private BlockPos territoryCenter;
-    private int territoryRadius = 16;
+    private int territoryRadius = DEFAULT_TERRITORY_RADIUS;
     private BlockPos lastKnownTarget;
     private int memoryTicks;
     private boolean warnedTarget;
@@ -321,7 +343,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
 
         this.decaySuspicion();
 
-        List<PlayerEntity> players = this.getWorld().getPlayers(player -> player.squaredDistanceTo(this) <= 256);
+        List<PlayerEntity> players = this.getWorld().getPlayers(player -> player.squaredDistanceTo(this) <= DETECTION_RANGE_SQ);
         for (PlayerEntity player : players) {
             this.evaluatePlayer(player);
         }
@@ -330,7 +352,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (target != null) {
             this.adjustRoleForTarget(target);
             this.lastKnownTarget = target.getBlockPos();
-            this.memoryTicks = 200;
+            this.memoryTicks = MEMORY_TICKS_PRIMARY;
             if (target instanceof PlayerEntity player) {
                 this.attemptArrest(player);
             }
@@ -344,7 +366,8 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (!this.isWithinTerritory(player)) {
             return;
         }
-        if (player.getScoreboardTags().contains("guard_enemy")) {
+        Set<String> tags = player.getScoreboardTags();
+        if (tags.contains(ENEMY_TAG)) {
             this.increaseSuspicion(40, player);
             return;
         }
@@ -352,15 +375,15 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
             return;
         }
 
-        int gain = 4;
+        int gain = BASE_SUSPICION_GAIN;
         if (player.isSprinting() || player.isSwimming()) {
-            gain += 4;
+            gain += MOVEMENT_SUSPICION_BONUS;
         }
         if (player.isSneaking()) {
-            gain += 2;
+            gain += SNEAK_SUSPICION_BONUS;
         }
         if (!this.getWorld().isDay()) {
-            gain += 3;
+            gain += NIGHT_SUSPICION_BONUS;
         }
         this.increaseSuspicion(gain, player);
     }
@@ -372,11 +395,11 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         this.setSuspicion(this.getSuspicion() + amount);
         if (source != null) {
             this.lastKnownTarget = source.getBlockPos();
-            this.memoryTicks = Math.max(this.memoryTicks, 120);
+            this.memoryTicks = Math.max(this.memoryTicks, MEMORY_TICKS_FALLBACK);
         }
-        if (this.getSuspicion() >= 60 && this.getTarget() == null && source != null) {
+        if (this.getSuspicion() >= ESCALATION_THRESHOLD && this.getTarget() == null && source != null) {
             this.escalateToTarget(source);
-        } else if (this.getSuspicion() >= 30 && !this.warnedTarget && source != null) {
+        } else if (this.getSuspicion() >= WARNING_THRESHOLD && !this.warnedTarget && source != null) {
             this.warnEntity(source);
         }
     }
@@ -412,7 +435,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (!(threat instanceof LivingEntity living)) {
             return;
         }
-        List<GuardEntity> allies = this.getWorld().getEntitiesByClass(GuardEntity.class, this.getBoundingBox().expand(16.0D), guard -> guard != this && guard.isOnDuty());
+        List<GuardEntity> allies = this.getWorld().getEntitiesByClass(GuardEntity.class, this.getBoundingBox().expand(BACKUP_RANGE), guard -> guard != this && guard.isOnDuty());
         for (GuardEntity ally : allies) {
             if (ally.getTarget() == null && ally.isWithinTerritory(threat)) {
                 ally.setTarget(living);
@@ -439,7 +462,8 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (this.isOwner(player)) {
             return true;
         }
-        if (player.getScoreboardTags().contains("guard_friend")) {
+        Set<String> tags = player.getScoreboardTags();
+        if (tags.contains(FRIEND_TAG)) {
             return true;
         }
         if (this.getOwner() instanceof PlayerEntity owner) {
@@ -461,10 +485,10 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (this.getWorld().isClient) {
             return;
         }
-        if (this.squaredDistanceTo(player) > 16.0D) {
+        if (this.squaredDistanceTo(player) > ARREST_RANGE_SQ) {
             return;
         }
-        if (player.getHealth() <= 6.0F) {
+        if (player.getHealth() <= ARREST_HEALTH_THRESHOLD) {
             player.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 120, 1));
             player.addStatusEffect(new StatusEffectInstance(StatusEffects.WEAKNESS, 120, 0));
             player.sendMessage(Text.literal("You are under arrest. Drop your weapons!"), true);
@@ -476,9 +500,10 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
             return;
         }
         double distanceSq = this.squaredDistanceTo(target);
-        if (distanceSq > 144.0D && this.getGuardRole() == GuardRole.SWORD) {
+        GuardRole role = this.getGuardRole();
+        if (distanceSq > RANGED_SWITCH_RANGE_SQ && role == GuardRole.SWORD) {
             this.setGuardRole(GuardRole.CROSSBOW);
-        } else if (distanceSq < 16.0D && this.getGuardRole() == GuardRole.ARCHER) {
+        } else if (distanceSq < MELEE_SWITCH_RANGE_SQ && (role == GuardRole.ARCHER || role == GuardRole.CROSSBOW)) {
             this.setGuardRole(GuardRole.SWORD);
         }
     }
@@ -527,8 +552,16 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         nbt.putInt("TerritoryX", center.getX());
         nbt.putInt("TerritoryY", center.getY());
         nbt.putInt("TerritoryZ", center.getZ());
+        nbt.putBoolean("HasTerritoryCenter", true);
         nbt.putInt("TerritoryRadius", this.territoryRadius);
         nbt.putInt("Suspicion", this.getSuspicion());
+    }
+
+    private boolean hasStoredTerritoryCenter(NbtCompound nbt) {
+        if (nbt.contains("HasTerritoryCenter")) {
+            return nbt.getBoolean("HasTerritoryCenter");
+        }
+        return nbt.contains("TerritoryX") || nbt.contains("TerritoryY") || nbt.contains("TerritoryZ");
     }
 
     @Override
@@ -541,7 +574,8 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         int x = nbt.getInt("TerritoryX");
         int y = nbt.getInt("TerritoryY");
         int z = nbt.getInt("TerritoryZ");
-        if (x != 0 || y != 0 || z != 0) {
+        boolean hasCenter = this.hasStoredTerritoryCenter(nbt);
+        if (hasCenter) {
             this.territoryCenter = new BlockPos(x, y, z);
         }
         this.territoryRadius = nbt.contains("TerritoryRadius") ? nbt.getInt("TerritoryRadius") : this.territoryRadius;
@@ -604,11 +638,11 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (target != null) {
             this.setSitting(false);
             this.lastKnownTarget = target.getBlockPos();
-            this.memoryTicks = 200;
+            this.memoryTicks = MEMORY_TICKS_PRIMARY;
             this.warnedTarget = false;
         } else if (previous != null) {
             this.lastKnownTarget = previous.getBlockPos();
-            this.memoryTicks = 120;
+            this.memoryTicks = MEMORY_TICKS_FALLBACK;
         }
     }
 
@@ -623,15 +657,19 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         return child;
     }
 
+    private int randomTerritoryOffset() {
+        return MathHelper.nextInt(this.getRandom(), -this.territoryRadius, this.territoryRadius);
+    }
+
     private BlockPos getNextPatrolPos() {
         PatrolMode mode = this.getPatrolMode();
         BlockPos center = this.getTerritoryCenter();
         return switch (mode) {
             case POST -> center;
-            case RANDOM -> center.add(MathHelper.nextInt(this.getRandom(), -this.territoryRadius, this.territoryRadius), 0, MathHelper.nextInt(this.getRandom(), -this.territoryRadius, this.territoryRadius));
+            case RANDOM -> center.add(this.randomTerritoryOffset(), 0, this.randomTerritoryOffset());
             case WAYPOINT -> {
-                int index = this.patrolIndex % 4;
-                this.patrolIndex = (this.patrolIndex + 1) % 4;
+                int index = this.patrolIndex % WAYPOINT_COUNT;
+                this.patrolIndex = (this.patrolIndex + 1) % WAYPOINT_COUNT;
                 yield switch (index) {
                     case 0 -> center.add(this.territoryRadius / 2, 0, 0);
                     case 1 -> center.add(0, 0, this.territoryRadius / 2);
@@ -672,7 +710,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
                 this.guard.getNavigation().startMovingTo(next.getX() + 0.5, next.getY(), next.getZ() + 0.5, 1.05D);
                 this.guard.getLookControl().lookAt(next.getX() + 0.5, next.getY(), next.getZ() + 0.5);
             }
-            this.cooldown = 80 + this.guard.getRandom().nextInt(40);
+            this.cooldown = BASE_PATROL_COOLDOWN + this.guard.getRandom().nextInt(PATROL_COOLDOWN_VARIANCE);
         }
     }
 
