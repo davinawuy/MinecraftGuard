@@ -350,9 +350,9 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         this.decaySuspicion();
 
         Vec3d center = this.getPos();
-        if (this.cachedDetectionBox == null || this.cachedDetectionCenter == null || !this.cachedDetectionCenter.equals(center)) {
+        if (this.cachedDetectionBox == null || this.cachedDetectionCenter == null || this.cachedDetectionCenter.squaredDistanceTo(center) > 0.01D) {
             this.cachedDetectionCenter = center;
-            this.cachedDetectionBox = this.getBoundingBox().expand(DETECTION_RANGE);
+            this.cachedDetectionBox = Box.of(center, DETECTION_RANGE * 2, DETECTION_RANGE * 2, DETECTION_RANGE * 2);
         }
 
         List<PlayerEntity> players = this.getWorld().getPlayers(DETECTION_PREDICATE, this, this.cachedDetectionBox);
