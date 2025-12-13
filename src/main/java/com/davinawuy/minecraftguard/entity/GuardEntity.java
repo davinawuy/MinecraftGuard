@@ -71,9 +71,9 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
     private static final int MEMORY_TICKS_FALLBACK = 120;
     private static final int DEFAULT_TERRITORY_RADIUS = 16;
     // Distance threshold before recalculating detection box cache
-    private static final double DETECTION_CACHE_EPSILON = 0.01D;
-    // Box.of expects full dimensions; doubling gives a radius of DETECTION_RANGE
-    private static final double DETECTION_BOX_SIZE = DETECTION_RANGE * 2;
+    private static final double DETECTION_CACHE_EPSILON = 1.0D;
+    // Box.of expects full dimensions; using DETECTION_RANGE keeps width in line with the predicate radius
+    private static final double DETECTION_BOX_SIZE = DETECTION_RANGE;
     // Predicate for attackable players within DETECTION_RANGE
     private static final TargetPredicate DETECTION_PREDICATE = TargetPredicate.createAttackable().setBaseMaxDistance(DETECTION_RANGE);
 
@@ -357,7 +357,6 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         Vec3d center = this.getPos();
         if (this.shouldUpdateDetectionCache(center)) {
             this.cachedDetectionCenter = center;
-            // size doubled so the box radius matches DETECTION_RANGE on all axes
             this.cachedDetectionBox = Box.of(center, DETECTION_BOX_SIZE, DETECTION_BOX_SIZE, DETECTION_BOX_SIZE);
         }
 
