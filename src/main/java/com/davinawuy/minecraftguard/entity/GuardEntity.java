@@ -35,6 +35,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.scoreboard.AbstractTeam;
+import net.minecraft.registry.tag.DamageTypeTags;
 
 import java.util.EnumSet;
 import java.util.List;
@@ -343,9 +344,11 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
 
         this.decaySuspicion();
 
-        List<PlayerEntity> players = this.getWorld().getPlayers(player -> player.squaredDistanceTo(this) <= DETECTION_RANGE_SQ);
+        List<? extends PlayerEntity> players = this.getWorld().getPlayers();
         for (PlayerEntity player : players) {
-            this.evaluatePlayer(player);
+            if (player.squaredDistanceTo(this) <= DETECTION_RANGE_SQ) {
+                this.evaluatePlayer(player);
+            }
         }
 
         LivingEntity target = this.getTarget();
@@ -366,7 +369,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (!this.isWithinTerritory(player)) {
             return;
         }
-        Set<String> tags = player.getScoreboardTags();
+        Set<String> tags = player.getCommandTags();
         if (tags.contains(ENEMY_TAG)) {
             this.increaseSuspicion(40, player);
             return;
@@ -462,7 +465,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         if (this.isOwner(player)) {
             return true;
         }
-        Set<String> tags = player.getScoreboardTags();
+        Set<String> tags = player.getCommandTags();
         if (tags.contains(FRIEND_TAG)) {
             return true;
         }
@@ -533,7 +536,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
                 this.increaseSuspicion(40, living);
                 this.setTarget(living);
             }
-            if (source.isExplosive()) {
+            if (source.isIn(DamageTypeTags.IS_EXPLOSION)) {
                 this.raiseAlarm();
                 this.callForBackup(attacker);
             }
