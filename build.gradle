@@ -24,6 +24,10 @@ repositories {
     }
 }
 
+dependencyLocking {
+    lockAllConfigurations()
+}
+
 dependencies {
     // Minecraft and Fabric dependencies
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
