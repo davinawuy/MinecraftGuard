@@ -1,9 +1,11 @@
 name: Build and Release Mod
 
 on:
+  workflow_dispatch:
   release:
     types: [created]
   push:
+    branches: [main]
     tags:
       - 'v*'
 
@@ -28,6 +30,13 @@ jobs:
 
       - name: Build with Gradle
         run: ./gradlew build --no-daemon
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: minecraftguard-jars
+          path: build/libs/*.jar
+          if-no-files-found: error
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
