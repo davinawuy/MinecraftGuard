@@ -30,5 +30,6 @@ jobs:
           if [ -f package-lock.json ]; then
             npm ci
           else
-            echo "No package-lock.json found; skipping npm ci."
+            echo "No package-lock.json found; running npm install instead."
+            npm install
           fi
