@@ -70,8 +70,11 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
     private static final int MEMORY_TICKS_PRIMARY = 200;
     private static final int MEMORY_TICKS_FALLBACK = 120;
     private static final int DEFAULT_TERRITORY_RADIUS = 16;
+    // Distance threshold before recalculating detection box cache
     private static final double DETECTION_CACHE_EPSILON = 0.01D;
+    // Box.of expects full dimensions; doubling gives a radius of DETECTION_RANGE
     private static final double DETECTION_BOX_SIZE = DETECTION_RANGE * 2;
+    // Predicate for attackable players within DETECTION_RANGE
     private static final TargetPredicate DETECTION_PREDICATE = TargetPredicate.createAttackable().setBaseMaxDistance(DETECTION_RANGE);
 
     private BlockPos territoryCenter;
@@ -352,7 +355,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         this.decaySuspicion();
 
         Vec3d center = this.getPos();
-        if (this.cachedDetectionBox == null || this.cachedDetectionCenter == null || this.cachedDetectionCenter.squaredDistanceTo(center) > DETECTION_CACHE_EPSILON) {
+        if (this.shouldUpdateDetectionCache(center)) {
             this.cachedDetectionCenter = center;
             // size doubled so the box radius matches DETECTION_RANGE on all axes
             this.cachedDetectionBox = Box.of(center, DETECTION_BOX_SIZE, DETECTION_BOX_SIZE, DETECTION_BOX_SIZE);
@@ -372,6 +375,13 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
                 this.attemptArrest(player);
             }
         }
+    }
+
+    private boolean shouldUpdateDetectionCache(Vec3d center) {
+        if (this.cachedDetectionBox == null || this.cachedDetectionCenter == null) {
+            return true;
+        }
+        return this.cachedDetectionCenter.squaredDistanceTo(center) > DETECTION_CACHE_EPSILON;
     }
 
     private void evaluatePlayer(PlayerEntity player) {
