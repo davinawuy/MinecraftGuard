@@ -20,6 +20,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.projectile.PersistentProjectileEntity;
 import net.minecraft.entity.projectile.ProjectileEntity;
 import net.minecraft.entity.projectile.ProjectileUtil;
+import net.minecraft.entity.ai.TargetPredicate;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -34,6 +35,7 @@ import net.minecraft.world.EntityView;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.util.math.Box;
 import net.minecraft.scoreboard.AbstractTeam;
 import net.minecraft.registry.tag.DamageTypeTags;
 
@@ -344,11 +346,11 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
 
         this.decaySuspicion();
 
-        List<? extends PlayerEntity> players = this.getWorld().getPlayers();
+        TargetPredicate predicate = TargetPredicate.createAttackable().setBaseMaxDistance(DETECTION_RANGE);
+        Box box = Box.of(this.getPos(), DETECTION_RANGE * 2, DETECTION_RANGE * 2, DETECTION_RANGE * 2);
+        List<PlayerEntity> players = this.getWorld().getPlayers(predicate, this, box);
         for (PlayerEntity player : players) {
-            if (player.squaredDistanceTo(this) <= DETECTION_RANGE_SQ) {
-                this.evaluatePlayer(player);
-            }
+            this.evaluatePlayer(player);
         }
 
         LivingEntity target = this.getTarget();
