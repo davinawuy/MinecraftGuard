@@ -70,6 +70,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
     private static final int MEMORY_TICKS_PRIMARY = 200;
     private static final int MEMORY_TICKS_FALLBACK = 120;
     private static final int DEFAULT_TERRITORY_RADIUS = 16;
+    private static final TargetPredicate DETECTION_PREDICATE = TargetPredicate.createAttackable().setBaseMaxDistance(DETECTION_RANGE);
 
     private BlockPos territoryCenter;
     private int territoryRadius = DEFAULT_TERRITORY_RADIUS;
@@ -77,6 +78,8 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
     private int memoryTicks;
     private boolean warnedTarget;
     private int patrolIndex;
+    private Box cachedDetectionBox;
+    private Vec3d cachedDetectionCenter;
 
     public GuardEntity(EntityType<? extends TameableEntity> entityType, World world) {
         super(entityType, world);
@@ -346,9 +349,13 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
 
         this.decaySuspicion();
 
-        TargetPredicate predicate = TargetPredicate.createAttackable().setBaseMaxDistance(DETECTION_RANGE);
-        Box box = this.getBoundingBox().expand(DETECTION_RANGE);
-        List<PlayerEntity> players = this.getWorld().getPlayers(predicate, this, box);
+        Vec3d center = this.getPos();
+        if (this.cachedDetectionBox == null || this.cachedDetectionCenter == null || !this.cachedDetectionCenter.equals(center)) {
+            this.cachedDetectionCenter = center;
+            this.cachedDetectionBox = this.getBoundingBox().expand(DETECTION_RANGE);
+        }
+
+        List<PlayerEntity> players = this.getWorld().getPlayers(DETECTION_PREDICATE, this, this.cachedDetectionBox);
         for (PlayerEntity player : players) {
             this.evaluatePlayer(player);
         }
