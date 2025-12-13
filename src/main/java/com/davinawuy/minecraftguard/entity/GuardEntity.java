@@ -347,7 +347,7 @@ public class GuardEntity extends TameableEntity implements RangedAttackMob, Cros
         this.decaySuspicion();
 
         TargetPredicate predicate = TargetPredicate.createAttackable().setBaseMaxDistance(DETECTION_RANGE);
-        Box box = Box.of(this.getPos(), DETECTION_RANGE * 2, DETECTION_RANGE * 2, DETECTION_RANGE * 2);
+        Box box = Box.of(this.getPos(), DETECTION_RANGE, DETECTION_RANGE, DETECTION_RANGE);
         List<PlayerEntity> players = this.getWorld().getPlayers(predicate, this, box);
         for (PlayerEntity player : players) {
             this.evaluatePlayer(player);
